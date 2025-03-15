@@ -142,41 +142,27 @@ function Check-Code {
         # 克隆代码库
         try {
             Log-Message "克隆代码库..."
-            git clone https://github.com/bleasprodhnf/niushop-backup.git temp-shop
+            git clone https://github.com/bleasprodhnf/niushop-backup.git niushop-master
             
             # 移动niushop-master目录
-            if (Test-Path "temp-shop\niushop-master") {
-                Move-Item -Path "temp-shop\niushop-master" -Destination $PSScriptRoot
+            if (Test-Path "niushop-master\niushop-master") {
+                Move-Item -Path "niushop-master" -Destination $PSScriptRoot
                 Log-Message "代码拉取成功"
             } else {
                 Write-Error "代码库中未找到niushop-master目录"
             }
             
             # 清理临时目录
-            if (Test-Path "temp-shop") {
-                Remove-Item -Path "temp-shop" -Recurse -Force
+            if (Test-Path "niushop-master") {
+                Remove-Item -Path "niushop-master" -Recurse -Force
             }
         } catch {
             Write-Error "代码拉取失败: $_"
         }
     }
     
-    # 检查并获取Nginx Proxy Manager代码
-    $nginxProxyManagerDir = "$PSScriptRoot\nginx-proxy-manager"
-    if (Test-Path $nginxProxyManagerDir) {
-        Log-Message "nginx-proxy-manager目录已存在"
-    } else {
-        Log-Message "nginx-proxy-manager目录不存在，从GitHub拉取代码..."
-        
-        # 克隆代码库
-        try {
-            Log-Message "克隆Nginx Proxy Manager代码库..."
-            git clone https://github.com/bleasprodhnf/nginx-proxy-manager.git "$PSScriptRoot\nginx-proxy-manager"
-            Log-Message "Nginx Proxy Manager代码拉取成功"
-        } catch {
-            Write-Error "Nginx Proxy Manager代码拉取失败: $_"
-        }
-    }
+    # 不再需要拉取Nginx Proxy Manager代码，因为我们使用官方镜像
+    Log-Message "使用官方Nginx Proxy Manager镜像，无需拉取代码"
     
     Write-Success "代码检查通过"
 }
@@ -190,7 +176,8 @@ function Create-Directories {
         "$PSScriptRoot\data\nginx",
         "$PSScriptRoot\data\nginx\proxy_host",
         "$PSScriptRoot\mysql_data",
-        "$PSScriptRoot\logs"
+        "$PSScriptRoot\logs",
+        "$PSScriptRoot\letsencrypt"
     )
     
     foreach ($dir in $directories) {
@@ -205,7 +192,7 @@ function Create-Directories {
     Write-Success "目录创建完成"
 }
 
-# 创建Nginx代理配置文件
+# 创建Nginx Proxy Manager代理配置文件
 function Create-NginxConfig {
     Log-Message "创建Nginx代理配置文件..."
     
@@ -299,20 +286,7 @@ function Create-DockerComposeConfig {
     networks:
       - niushop_network
 
-  # Nginx服务
-  nginx:
-    image: nginx:latest
-    container_name: niushop_nginx
-    restart: always
-    volumes:
-      - ./niushop-master/niucloud:/var/www/html
-      - ./nginx.conf:/etc/nginx/conf.d/default.conf
-    ports:
-      - "8080:80"
-    depends_on:
-      - php
-    networks:
-      - niushop_network
+
 
   # Redis服务
   redis:
@@ -326,20 +300,20 @@ function Create-DockerComposeConfig {
 
   # Nginx Proxy Manager
   nginx-proxy-manager:
-    build:
-      context: ./nginx-proxy-manager/docker
-      dockerfile: Dockerfile
+    image: 'jc21/nginx-proxy-manager:latest'
     container_name: niushop_proxy_manager
-    restart: always
+    restart: unless-stopped
     ports:
       - "80:80"
       - "81:81"
       - "443:443"
-    volumes:
-      - ./data:/data
-      - ./logs:/var/log
     environment:
       - DB_SQLITE_FILE=/data/database.sqlite
+      - INITIAL_ADMIN_EMAIL=admin@admin.com
+      - INITIAL_ADMIN_PASSWORD=123456
+    volumes:
+      - ./data:/data
+      - ./letsencrypt:/etc/letsencrypt
     networks:
       - niushop_network
 
@@ -354,34 +328,7 @@ networks:
     Write-Success "Docker Compose配置创建完成"
 }
 
-# 创建Nginx配置文件
-function Create-NginxServerConfig {
-    Log-Message "创建Nginx服务器配置文件..."
-    
-    $nginxServerConfigPath = "$PSScriptRoot\nginx.conf"
-    $nginxServerConfig = @"
-server {
-    listen 80;
-    server_name localhost;
-    root /var/www/html/public;
-    index index.php index.html index.htm;
-    
-    location / {
-        if (!-e \$request_filename) {
-            rewrite ^(.*)\$ /index.php/\$1 last;
-            break;
-        }
-    }
-    
-    location ~ \.php(.*) {
-        fastcgi_pass php:9000;
-        fastcgi_index index.php;
-        fastcgi_split_path_info ^(.+\.php)(/.+)\$;
-        fastcgi_param PATH_INFO \$fastcgi_path_info;
-        fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
-        include fastcgi_params;
-    }
-}
+# 删除Nginx配置文件创建函数，因为已不再需要
 
 # 设置文件权限
 function Set-FilePermissions {
