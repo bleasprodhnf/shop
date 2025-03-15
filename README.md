@@ -39,7 +39,7 @@ chmod +x deploy-niushop-macos.sh
 1. 访问商城：http://localhost
 2. 访问Nginx代理管理器：http://localhost:81
    - 默认用户名：admin@admin.com
-   - 默认密码：88888888
+   - 默认密码：123456
 
 ## 数据库信息
 

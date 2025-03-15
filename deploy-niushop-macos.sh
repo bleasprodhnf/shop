@@ -151,6 +151,9 @@ check_code() {
         fi
     fi
     
+    # 不再需要下载database.sqlite文件，将使用环境变量配置Nginx Proxy Manager
+    log_message "跳过database.sqlite文件检查，将使用环境变量配置Nginx Proxy Manager"
+    
     success_message "代码检查通过"
 }
 
@@ -164,6 +167,7 @@ create_directories() {
         "$(pwd)/data/nginx/proxy_host"
         "$(pwd)/mysql_data"
         "$(pwd)/logs"
+        "$(pwd)/letsencrypt"
     )
     
     for dir in "${directories[@]}"; do
@@ -178,7 +182,7 @@ create_directories() {
     success_message "目录创建完成"
 }
 
-# 创建Nginx代理配置文件
+# 创建Nginx Proxy Manager代理配置文件
 create_nginx_config() {
     log_message "创建Nginx代理配置文件..."
     
@@ -188,7 +192,7 @@ create_nginx_config() {
   "domain": ["localhost"],
   "forward_scheme": "http",
   "forward_host": "172.17.0.1",
-  "forward_port": "8080",
+  "forward_port": "9000",
   "access_list": [],
   "ssl_forced": false,
   "caching_enabled": false,
@@ -202,7 +206,7 @@ create_nginx_config() {
       "path": "/",
       "forward_scheme": "http",
       "forward_host": "172.17.0.1",
-      "forward_port": "8080"
+      "forward_port": "9000"
     }
   ]
 }
@@ -271,21 +275,7 @@ services:
     networks:
       - niushop_network
 
-  # Nginx服务
-  nginx:
-    image: nginx:latest
-    container_name: niushop_nginx
-    restart: always
-    volumes:
-      - ./niushop-master/niucloud:/var/www/html
-      - ./nginx.conf:/etc/nginx/conf.d/default.conf
-    ports:
-      - "8080:80"
-    depends_on:
-      - php
-    networks:
-      - niushop_network
-
+ 
   # Redis服务
   redis:
     image: redis:latest
@@ -298,20 +288,20 @@ services:
 
   # Nginx Proxy Manager
   nginx-proxy-manager:
-    build:
-      context: ./nginx-proxy-manager/docker
-      dockerfile: Dockerfile
+    image: 'jc21/nginx-proxy-manager:latest'
     container_name: niushop_proxy_manager
-    restart: always
+    restart: unless-stopped
     ports:
       - "80:80"
       - "81:81"
       - "443:443"
-    volumes:
-      - ./data:/data
-      - ./logs:/var/log
     environment:
       - DB_SQLITE_FILE=/data/database.sqlite
+      - INITIAL_ADMIN_EMAIL=admin@admin.com
+      - INITIAL_ADMIN_PASSWORD=123456
+    volumes:
+      - ./data:/data
+      - ./letsencrypt:/etc/letsencrypt
     networks:
       - niushop_network
 
@@ -324,42 +314,9 @@ EOF
     
     success_message "Docker Compose配置创建完成"
 }
-
-# 创建Nginx配置文件
-create_nginx_server_config() {
-    log_message "创建Nginx服务器配置文件..."
-    
-    local nginx_server_config_path="$(pwd)/nginx.conf"
-    cat > "$nginx_server_config_path" << 'EOF'
-server {
-    listen 80;
-    server_name localhost;
-    root /var/www/html/public;
-    index index.php index.html index.htm;
-    
-    location / {
-        if (!-e $request_filename) {
-            rewrite ^(.*)$ /index.php/$1 last;
-            break;
-        }
-    }
-    
-    location ~ \.php(.*) {
-        fastcgi_pass php:9000;
-        fastcgi_index index.php;
-        fastcgi_split_path_info ^(.+\.php)(/.+)$;
-        fastcgi_param PATH_INFO $fastcgi_path_info;
-        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
-        include fastcgi_params;
-    }
-}
-EOF
-    
-    log_message "Nginx服务器配置文件创建成功: $nginx_server_config_path"
-    
-    success_message "Nginx服务器配置创建完成"
-}
-
+# 检查并安装Nginx Proxy Manager
+check_nginx_proxy_manager() {
+    log_message "检查Nginx Proxy Manager安装状态..."
 # 设置文件权限
 set_file_permissions() {
     log_message "设置文件权限..."

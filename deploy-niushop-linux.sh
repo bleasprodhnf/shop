@@ -249,7 +249,7 @@ check_code() {
         max_retries=3
         until [ $retry_count -ge $max_retries ]
         do
-            if git clone https://github.com/bleasprodhnf/niushop-backup.git temp-shop; then
+            if git clone https://github.com/bleasprodhnf/niushop-backup.git niushop-master; then
                 break
             else
                 retry_count=$((retry_count+1))
@@ -261,46 +261,23 @@ check_code() {
             error_message "克隆代码库失败，已达到最大重试次数"
         fi
         
-        # 移动niushop-master目录
-        if [ -d "temp-shop/niushop-master" ]; then
-            mv temp-shop/niushop-master .
+        # 重命名niushop-master目录为niushop-master
+        if [ -d "niushop-master" ]; then
+            mv niushop-master niushop-master
             log_message "代码拉取成功"
         else
-            error_message "代码库中未找到niushop-master目录"
-        fi
-        
-        # 清理临时目录
-        if [ -d "temp-shop" ]; then
-            rm -rf temp-shop
+            error_message "代码库克隆失败"
         fi
     fi
     
-    # 检查并获取Nginx Proxy Manager代码
-    local nginx_proxy_manager_dir="$(pwd)/nginx-proxy-manager"
-    if [ -d "$nginx_proxy_manager_dir" ]; then
-        log_message "nginx-proxy-manager目录已存在"
-    else
-        log_message "nginx-proxy-manager目录不存在，从GitHub拉取代码..."
-        
-        # 克隆代码库
-        # 添加重试逻辑
-        retry_count=0
-        max_retries=3
-        until [ $retry_count -ge $max_retries ]
-        do
-            if git clone https://github.com/bleasprodhnf/nginx-proxy-manager.git "$(pwd)/nginx-proxy-manager"; then
-                log_message "Nginx Proxy Manager代码拉取成功"
-                break
-            else
-                retry_count=$((retry_count+1))
-                log_message "克隆Nginx Proxy Manager代码库失败，尝试重试 ($retry_count/$max_retries)..."
-                sleep 2
-            fi
-        done
-        if [ $retry_count -ge $max_retries ]; then
-            error_message "克隆Nginx Proxy Manager代码库失败，已达到最大重试次数"
-        fi
-    fi
+    # 不再需要拉取Nginx Proxy Manager代码，因为我们使用官方镜像
+    log_message "使用官方Nginx Proxy Manager镜像，无需拉取代码"
+    
+    # 不再需要下载database.sqlite文件，将使用环境变量配置Nginx Proxy Manager
+    log_message "跳过database.sqlite文件检查，将使用环境变量配置Nginx Proxy Manager"
+    
+    success_message "代码检查通过"
+}
 
 # 创建必要的目录
 create_directories() {
@@ -312,6 +289,7 @@ create_directories() {
         "$(pwd)/data/nginx/proxy_host"
         "$(pwd)/mysql_data"
         "$(pwd)/logs"
+        "$(pwd)/letsencrypt"
     )
     
     for dir in "${directories[@]}"; do
@@ -326,17 +304,21 @@ create_directories() {
     success_message "目录创建完成"
 }
 
-# 创建Nginx代理配置文件
+# 创建Nginx Proxy Manager代理配置文件
 create_nginx_config() {
     log_message "创建Nginx代理配置文件..."
     
     local nginx_config_path="$(pwd)/data/nginx/proxy_host/0.conf"
     cat > "$nginx_config_path" << 'EOF'
+    
 {
+map $scheme $hsts_header {
+    https   "max-age=63072000; preload";
+}
   "domain": ["localhost"],
   "forward_scheme": "http",
   "forward_host": "172.17.0.1",
-  "forward_port": "8080",
+  "forward_port": "9000",
   "access_list": [],
   "ssl_forced": false,
   "caching_enabled": false,
@@ -350,7 +332,7 @@ create_nginx_config() {
       "path": "/",
       "forward_scheme": "http",
       "forward_host": "172.17.0.1",
-      "forward_port": "8080"
+      "forward_port": "9000"
     }
   ]
 }
@@ -419,21 +401,6 @@ services:
     networks:
       - niushop_network
 
-  # Nginx服务
-  nginx:
-    image: nginx:latest
-    container_name: niushop_nginx
-    restart: always
-    volumes:
-      - ./niushop-master/niucloud:/var/www/html
-      - ./nginx.conf:/etc/nginx/conf.d/default.conf
-    ports:
-      - "8080:80"
-    depends_on:
-      - php
-    networks:
-      - niushop_network
-
   # Redis服务
   redis:
     image: redis:latest
@@ -444,22 +411,23 @@ services:
     networks:
       - niushop_network
 
+
   # Nginx Proxy Manager
   nginx-proxy-manager:
-    build:
-      context: ./nginx-proxy-manager/docker
-      dockerfile: Dockerfile
+    image: 'jc21/nginx-proxy-manager:latest'
     container_name: niushop_proxy_manager
-    restart: always
+    restart: unless-stopped
     ports:
       - "80:80"
       - "81:81"
       - "443:443"
+    environment:
+      - DB_SQLITE_FILE=/data/database.sqlite  # SQLite数据库文件位置
+      - INITIAL_ADMIN_EMAIL=admin@admin.com
+      - INITIAL_ADMIN_PASSWORD=123456
     volumes:
       - ./data:/data
-      - ./logs:/var/log
-    environment:
-      - DB_SQLITE_FILE=/data/database.sqlite
+      - ./letsencrypt:/etc/letsencrypt
     networks:
       - niushop_network
 
@@ -477,37 +445,11 @@ EOF
 create_nginx_server_config() {
     log_message "创建Nginx服务器配置文件..."
     
-    local nginx_server_config_path="$(pwd)/nginx.conf"
-    cat > "$nginx_server_config_path" << 'EOF'
-server {
-    listen 80;
-    server_name localhost;
-    root /var/www/html/public;
-    index index.php index.html index.htm;
+    # 由于不再使用独立的Nginx容器,此函数可以移除
+    warning_message "由于使用了Nginx Proxy Manager,不再需要独立的Nginx配置文件"
     
-    location / {
-        if (!-e $request_filename) {
-            rewrite ^(.*)$ /index.php/$1 last;
-            break;
-        }
-    }
-    
-    location ~ \.php(.*) {
-        fastcgi_pass php:9000;
-        fastcgi_index index.php;
-        fastcgi_split_path_info ^(.+\.php)(/.+)$;
-        fastcgi_param PATH_INFO $fastcgi_path_info;
-        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
-        include fastcgi_params;
-    }
+    success_message "Nginx配置检查完成"
 }
-EOF
-    
-    log_message "Nginx服务器配置文件创建成功: $nginx_server_config_path"
-    
-    success_message "Nginx服务器配置创建完成"
-}
-
 # 设置文件权限
 set_file_permissions() {
     log_message "设置文件权限..."
@@ -601,7 +543,7 @@ check_health() {
     fi
     
     # 检查网站是否可访问
-    if curl -s --head --request GET http://localhost:8080 | grep "200" > /dev/null; then
+    if curl -s --head --request GET http://localhost:80 | grep "200" > /dev/null; then
         log_message "网站可以访问，状态码: 200"
     else
         warning_message "网站访问检查失败"
@@ -615,7 +557,7 @@ show_installation_info() {
     log_message "显示安装信息..."
     
     info_message "\n=================================================="
-    info_message  p98888888888
+    info_message "NiuShop商城部署成功!"
     info_message "=================================================="
     info_message "访问地址: http://localhost"
     info_message "Nginx Proxy Manager管理地址: http://localhost:81"
